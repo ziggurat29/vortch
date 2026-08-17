@@ -2,6 +2,7 @@
 #include <wx/bmpbndl.h>
 #include <wx/dcbuffer.h>
 #include <wx/taskbar.h>
+#include <wx/dnd.h>
 
 #include <string>
 #include <vector>
@@ -95,6 +96,26 @@ public:
   }
 #endif
 
+  // ---- drag-drop hooks (called by VortchDropTarget) ----
+  void OnDragEnter() {
+    dragOver_ = true;
+    if (peekMode_ && !moveMode_) AnimateTo(kFullSize);  // drag-to-expand
+  }
+  void OnDragLeave() {
+    dragOver_ = false;
+    if (peekMode_ && !moveMode_) leaveTimer_.StartOnce(180);
+  }
+  void OnFilesDropped(const wxArrayString& files) {
+    dragOver_ = false;
+    // PLACEHOLDER: real dispatch (classify -> processor) replaces this.
+    wxString msg = wxString::Format("Dropped %d item(s):", (int)files.GetCount());
+    for (size_t i = 0; i < files.GetCount(); ++i) msg += "\n" + files[i];
+    CallAfter([this, msg] {
+      wxMessageBox(msg, "vortch (placeholder)", wxOK | wxICON_INFORMATION);
+      ReconcilePeek();  // drag-drop + modal box desync enter/leave; re-sync size
+    });
+  }
+
 private:
   enum {
     ID_MOVE = wxID_HIGHEST + 1, ID_Z_TOPMOST, ID_Z_ONDESKTOP,
@@ -156,10 +177,10 @@ private:
     e.Skip();
   }
   void OnLeaveTimer(wxTimerEvent&) {
-    if (peekMode_ && !moveMode_ &&
-        !GetScreenRect().Contains(wxGetMousePosition())) {
-      AnimateTo(kPeekSize);
-    }
+    if (!peekMode_ || moveMode_) return;
+    const bool over = GetScreenRect().Contains(wxGetMousePosition());
+    hovered_ = over;
+    AnimateTo((over || dragOver_) ? kFullSize : kPeekSize);
   }
   // Reconcile peek size to the actual cursor position (enter/leave events don't
   // fire across a modal popup menu, so a leave during the menu is missed).
@@ -167,7 +188,7 @@ private:
     if (!peekMode_ || moveMode_) return;
     const bool over = GetScreenRect().Contains(wxGetMousePosition());
     hovered_ = over;
-    AnimateTo(over ? kFullSize : kPeekSize);
+    AnimateTo((over || dragOver_) ? kFullSize : kPeekSize);
   }
 
   // ---- context menu ----
@@ -317,12 +338,30 @@ private:
   bool    peekMode_    = false;
   bool    allDesktops_ = false;
   bool    hovered_     = false;
+  bool    dragOver_    = false;
   int     curSize_     = kFullSize;
   int     targetSize_  = kFullSize;
   WXHWND  savedForeground_ = nullptr;
   wxPoint originalPos_;
   wxPoint dragMouseStart_;
   wxPoint dragWinStart_;
+};
+
+// File drop target: drives drag-to-expand (enter/leave) and the drop handler.
+class VortchDropTarget : public wxFileDropTarget {
+public:
+  explicit VortchDropTarget(VortchFrame* f) : frame_(f) {}
+  bool OnDropFiles(wxCoord, wxCoord, const wxArrayString& filenames) override {
+    frame_->OnFilesDropped(filenames);
+    return true;
+  }
+  wxDragResult OnEnter(wxCoord, wxCoord, wxDragResult def) override {
+    frame_->OnDragEnter();
+    return def;
+  }
+  void OnLeave() override { frame_->OnDragLeave(); }
+private:
+  VortchFrame* frame_;
 };
 
 class VortchApp : public wxApp {
@@ -339,6 +378,7 @@ public:
     frame_ = new VortchFrame(bundle);
     frame_->Centre();
     frame_->Show();
+    frame_->SetDropTarget(new VortchDropTarget(frame_));
 
     tray_ = new VortchTray(bundle, frame_);
     return true;
