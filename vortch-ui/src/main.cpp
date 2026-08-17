@@ -58,6 +58,15 @@ public:
     Bind(wxEVT_LEFT_UP,            &VortchFrame::OnLeftUp,      this);
     Bind(wxEVT_TIMER,              &VortchFrame::OnMoveTimer,   this);
     Bind(wxEVT_MOUSE_CAPTURE_LOST, &VortchFrame::OnCaptureLost, this);
+#ifdef __WXMSW__
+    // Desktop-gadget behavior: interacting with the widget must not steal
+    // foreground focus from the user's active app.
+    {
+      HWND hwnd = static_cast<HWND>(GetHandle());
+      const LONG_PTR ex = ::GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+      ::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE);
+    }
+#endif
     ApplyZMode();
   }
 
@@ -100,12 +109,33 @@ private:
     (zmode_ == ZMode::Topmost ? top : des)->Check(true);
     menu.AppendSeparator();
     menu.Append(wxID_EXIT, "Quit vortch");
+    pendingMove_ = false;
+#ifdef __WXMSW__
+    // A popup menu only dismisses correctly (click-away / Esc) and avoids
+    // foregrounding its owner on selection when the owner IS foreground. Since
+    // we're WS_EX_NOACTIVATE, briefly foreground the widget for the menu.
+    HWND self   = static_cast<HWND>(GetHandle());
+    HWND prevFg = ::GetForegroundWindow();
+    ::SetForegroundWindow(self);
     PopupMenu(&menu);
+    if (pendingMove_) {
+      // Move needs mouse capture, which requires staying foreground. Enter now
+      // (menu closed, still foreground) and restore focus when the move ends.
+      pendingMove_     = false;
+      savedForeground_ = prevFg;
+      EnterMoveMode();
+    } else if (prevFg && prevFg != self) {
+      ::SetForegroundWindow(prevFg);  // restore focus for non-move commands
+    }
+#else
+    PopupMenu(&menu);
+    if (pendingMove_) { pendingMove_ = false; EnterMoveMode(); }
+#endif
   }
 
   void OnMenu(wxCommandEvent& e) {
     switch (e.GetId()) {
-      case ID_MOVE:        EnterMoveMode(); break;
+      case ID_MOVE:        pendingMove_ = true; break;  // deferred until menu closes
       case ID_Z_TOPMOST:   zmode_ = ZMode::Topmost;   ApplyZMode(); break;
       case ID_Z_ONDESKTOP: zmode_ = ZMode::OnDesktop; ApplyZMode(); break;
       case wxID_EXIT:      wxTheApp->ExitMainLoop();   break;
@@ -119,7 +149,6 @@ private:
     originalPos_ = GetPosition();
     SetCursor(wxCursor(wxCURSOR_SIZING));
     if (!HasCapture()) CaptureMouse();
-    SetFocus();
     moveTimer_.Start(25);  // poll Esc (borderless window can't rely on focus)
 #ifdef __WXMSW__
     // Temporarily float on top while moving, regardless of z-mode.
@@ -140,6 +169,13 @@ private:
     if (HasCapture()) ReleaseMouse();
     SetCursor(wxNullCursor);
     ApplyZMode();  // re-assert z-order after moving
+#ifdef __WXMSW__
+    if (savedForeground_) {
+      HWND fg = static_cast<HWND>(savedForeground_);
+      savedForeground_ = nullptr;
+      ::SetForegroundWindow(fg);  // hand focus back to the user's app
+    }
+#endif
     Refresh();
   }
 
@@ -177,14 +213,7 @@ private:
   }
 
   void OnCaptureLost(wxMouseCaptureLostEvent&) {
-    if (moveMode_) {
-      moveTimer_.Stop();
-      Move(originalPos_);
-      moveMode_ = false;
-      dragging_ = false;
-      SetCursor(wxNullCursor);
-      Refresh();
-    }
+    if (moveMode_) ExitMoveMode(/*revert=*/true);
   }
 
   void OnPaint(wxPaintEvent&) {
@@ -203,9 +232,11 @@ private:
 
   wxBitmapBundle bundle_;
   wxTimer moveTimer_;
-  ZMode   zmode_    = ZMode::Topmost;
-  bool    moveMode_ = false;
-  bool    dragging_ = false;
+  ZMode   zmode_       = ZMode::Topmost;
+  bool    moveMode_    = false;
+  bool    dragging_    = false;
+  bool    pendingMove_ = false;
+  WXHWND  savedForeground_ = nullptr;
   wxPoint originalPos_;
   wxPoint dragMouseStart_;
   wxPoint dragWinStart_;

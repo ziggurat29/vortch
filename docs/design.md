@@ -420,6 +420,58 @@ interface in `vortch-core`; SQLite arrives via vcpkg.
   coordinates to that grid — keeping our position model the single source of
   truth.
 
+### Windowing findings (Windows front end, `vortch-ui`)
+
+**Z-order (topmost vs. on-desktop) + cross-platform plan.**
+Context-menu toggle, implemented on Windows:
+- *Topmost*: `wxSTAY_ON_TOP` / `SetWindowPos(HWND_TOPMOST)`.
+- *On desktop (below apps)*: normal window + intercept `WM_WINDOWPOSCHANGING`
+  → `hwndInsertAfter = HWND_BOTTOM`. All top-level windows render above the
+  desktop window (Progman + its icon list-view), so a bottom-pinned window sits
+  **above the icons but below every app** — the requested behavior (distinct
+  from WorkerW-parenting, which would sit *below* the icons).
+- During **move mode** the window is forced topmost regardless of setting, then
+  returns to the chosen z-order on drop/abort.
+- Current code is Windows-only (`#ifdef __WXMSW__`); TODO move behind the
+  platform seam. Portability: *Topmost* is portable via wx (`_NET_WM_STATE_ABOVE`
+  on X11, high `NSWindow` level on macOS). *On-desktop* needs native per-OS:
+  **Linux/X11** `_NET_WM_STATE_BELOW` (+ skip taskbar/pager; Ubuntu MATE/Marco
+  honors it); **macOS** `NSWindow.level` just below `NSNormalWindowLevel` +
+  `collectionBehavior`; **Wayland** has no standard (only wlr-layer-shell on
+  wlroots).
+
+**Win+D / "Show Desktop" survival (deferred).**
+On-desktop mode is a normal top-level window, so **Win+D minimizes it** (known
+limitation). Two routes, both with costs:
+- *WorkerW parenting*: immune to Win+D, but sits *below* icons (breaks
+  "above icons") and is fragile (cross-process child of Explorer; version /
+  monitor / Explorer-restart quirks).
+- *Watchdog re-assert*: keep the above-icons window, detect Show Desktop and
+  re-show/re-bottom it (timer or shell hook). Keeps above icons but is hacky
+  (brief flicker; must distinguish show-desktop from a real user-minimize).
+Cross-platform note: mostly free elsewhere — X11
+`_NET_WM_WINDOW_TYPE_DESKTOP` rides through `_NET_SHOWING_DESKTOP`; a macOS
+desktop-level `NSWindow` survives Mission Control's Show Desktop.
+
+**Non-activating widget + context-menu focus (Win32 foreground lock).**
+Widget uses `WS_EX_NOACTIVATE` so idle / click / right-click / menu-display do
+not steal foreground. But:
+- A popup menu only dismisses correctly (click-away / Esc) and avoids
+  foregrounding its owner *when the owner is foreground* — so we briefly
+  `SetForegroundWindow(self)` for the menu, then restore focus to the prior app.
+- **Move** needs full mouse capture, which Windows grants only to the
+  **foreground** window; so during an active move the widget must stay
+  foreground, and focus is handed back on drop/abort (NOT right after the menu —
+  doing so drops the capture via `WM_CAPTURELOST` and cancels the move).
+- **Foreground-lock anomalies** when dismissing the menu *without selecting*
+  (benign; not fixed): Esc/selection → still foreground → restore succeeds ✅;
+  clicking **another app** → that app takes foreground first → our restore is
+  *denied* (app keeps focus; the old window's caret is a stale repaint);
+  clicking **desktop/taskbar** → restore denied → Windows' documented fallback
+  **flashes the target's taskbar button** instead of focusing it. Root cause:
+  `SetForegroundWindow` is restricted to the current foreground process
+  (anti-focus-steal). Workaround if ever needed: `AttachThreadInput` (finicky).
+
 ### Still open (do NOT scaffold until resolved)
 - **Seed graphic collateral** (in `assets/`): woodcut black-hole vortex
   `icon.svg` (per Sgr A* refs), mono `tray.svg`, side-view woodcut pink
