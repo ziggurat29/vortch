@@ -12,6 +12,9 @@
 - `core-sqlite` - core + the SQLite history store.
 - `full`        - everything incl. the wxWidgets `vortch-ui`. First build is
   slow (wxWidgets compiles from source).
+- `full-static` - like `full` but `x64-windows-static` triplet + static CRT
+  (Release). Produces a single self-contained `vortch.exe` (0 DLLs; imports only
+  Windows system DLLs). Rebuilds all deps static (slow first time).
 
 ## Configure / build / test (from a vcvars shell, VCPKG_ROOT set)
 ```
@@ -26,6 +29,7 @@ Built + tested on Windows with VS2022 Community (MSVC 19.44), CMake 3.31, Ninja
 1.12, vcpkg at `C:\Users\lemleyd\vcpkg`. `core` tests pass; `full` builds
 `vortch.exe` (wxWidgets 3.3.3) which launches and renders `assets/icon.svg`.
 `scripts/build.bat` hardcodes the local VS/vcpkg paths — adjust per machine.
+`full-static` verified: ~4.6 MB single `vortch.exe`, no DLLs, system-only imports.
 
 ## Linux (Ubuntu MATE 22.04)
 Install toolchain + the system dev libs vcpkg's wxWidgets needs, then build:

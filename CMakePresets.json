@@ -35,11 +35,23 @@
         "VORTCH_WITH_SQLITE": "ON",
         "VCPKG_MANIFEST_FEATURES": "ui;history"
       }
+    },
+    {
+      "name": "full-static",
+      "inherits": "full",
+      "displayName": "full static single-exe (x64-windows-static) - slow first build",
+      "binaryDir": "${sourceDir}/build/full-static",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+      }
     }
   ],
   "buildPresets": [
     { "name": "core",        "configurePreset": "core" },
     { "name": "core-sqlite", "configurePreset": "core-sqlite" },
-    { "name": "full",        "configurePreset": "full" }
+    { "name": "full",        "configurePreset": "full" },
+    { "name": "full-static", "configurePreset": "full-static" }
   ]
 }
