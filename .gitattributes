@@ -1,0 +1,33 @@
+# Line endings: LF everywhere — object store AND working tree.
+# This file owns the policy; do NOT rely on core.autocrlf (git default is
+# `false`, under which regenerating on Windows shows the whole tree changed
+# line-by-line and spuriously fails regen-clean gates).
+* text=auto eol=lf
+
+# Explicit text types
+*.svg          text eol=lf
+*.md           text eol=lf
+*.json         text eol=lf
+*.jsonc        text eol=lf
+*.txt          text eol=lf
+*.h            text eol=lf
+*.hpp          text eol=lf
+*.c            text eol=lf
+*.cc           text eol=lf
+*.cpp          text eol=lf
+*.mm           text eol=lf
+*.cmake        text eol=lf
+*.py           text eol=lf
+*.sh           text eol=lf
+*.desktop      text eol=lf
+CMakeLists.txt text eol=lf
+
+# Binary assets — never munged
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.pdf   binary

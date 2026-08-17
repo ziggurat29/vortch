@@ -1,0 +1,45 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "core",
+      "displayName": "core (no UI, no sqlite) - fast",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/core",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VORTCH_BUILD_UI": "OFF",
+        "VORTCH_WITH_SQLITE": "OFF",
+        "VORTCH_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "core-sqlite",
+      "inherits": "core",
+      "displayName": "core + sqlite history store",
+      "binaryDir": "${sourceDir}/build/core-sqlite",
+      "cacheVariables": {
+        "VORTCH_WITH_SQLITE": "ON",
+        "VCPKG_MANIFEST_FEATURES": "history"
+      }
+    },
+    {
+      "name": "full",
+      "inherits": "core",
+      "displayName": "full (UI + sqlite) - slow first build (wxWidgets)",
+      "binaryDir": "${sourceDir}/build/full",
+      "cacheVariables": {
+        "VORTCH_BUILD_UI": "ON",
+        "VORTCH_WITH_SQLITE": "ON",
+        "VCPKG_MANIFEST_FEATURES": "ui;history"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "core",        "configurePreset": "core" },
+    { "name": "core-sqlite", "configurePreset": "core-sqlite" },
+    { "name": "full",        "configurePreset": "full" }
+  ]
+}

@@ -1,0 +1,52 @@
+# --- Build output ---
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# --- MSVC / Windows ---
+.vs/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.idb
+*.exp
+*.lib
+
+# --- Editors / OS cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+
+# --- Scratch (not part of the project) ---
+temp/
+
+# --- Tooling caches ---
+.serena/cache/
+.gstack/
+.claude/
+.serena/
+.context/
+.tokensave/
+docs/superpowers/
+
+# private
+/\#notes/
+/\#samples/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

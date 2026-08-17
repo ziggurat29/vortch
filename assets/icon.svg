@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- vortch mark v2: woodcut-ish black-hole / vortex, per Sgr A* refs.
+       Fiery filaments swirling into an offset dark core. First pass. -->
+  <defs>
+    <clipPath id="disc"><circle cx="128" cy="128" r="120"/></clipPath>
+    <radialGradient id="bg" cx="52%" cy="45%" r="62%">
+      <stop offset="0%"  stop-color="#1e0b05"/>
+      <stop offset="60%" stop-color="#0a0402"/>
+      <stop offset="100%" stop-color="#050201"/>
+    </radialGradient>
+    <linearGradient id="fil" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#fff3d6"/>
+      <stop offset="45%" stop-color="#ffb038"/>
+      <stop offset="100%" stop-color="#cf4409"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#disc)">
+    <rect x="8" y="8" width="240" height="240" fill="url(#bg)"/>
+    <g fill="none" stroke-linecap="round">
+      <!-- glow underlay -->
+      <path d="M128,18 A110,110 0 0 1 238,128 A90,90 0 0 1 128,218 A68,68 0 0 1 60,128 A46,46 0 0 1 128,82 A26,26 0 0 1 154,128"
+            stroke="#ff7a12" stroke-width="26" opacity="0.32"/>
+      <!-- main filament -->
+      <path d="M128,18 A110,110 0 0 1 238,128 A90,90 0 0 1 128,218 A68,68 0 0 1 60,128 A46,46 0 0 1 128,82 A26,26 0 0 1 154,128"
+            stroke="url(#fil)" stroke-width="13" opacity="0.95"/>
+      <!-- secondary filaments (phase-shifted) for woodcut layering -->
+      <path transform="rotate(34 128 128)" d="M128,18 A110,110 0 0 1 238,128 A90,90 0 0 1 128,218 A68,68 0 0 1 60,128 A46,46 0 0 1 128,82 A26,26 0 0 1 154,128"
+            stroke="url(#fil)" stroke-width="8" opacity="0.55"/>
+      <path transform="rotate(-30 128 128)" d="M128,18 A110,110 0 0 1 238,128 A90,90 0 0 1 128,218 A68,68 0 0 1 60,128 A46,46 0 0 1 128,82 A26,26 0 0 1 154,128"
+            stroke="#ffd98a" stroke-width="5" opacity="0.45"/>
+      <!-- bright hotspot arc (upper-right, like the refs) -->
+      <path d="M150,40 A92,92 0 0 1 222,120" stroke="#fffdf5" stroke-width="10" opacity="0.95"/>
+    </g>
+    <!-- event horizon: offset dark core -->
+    <circle cx="118" cy="134" r="33" fill="#060201"/>
+    <circle cx="118" cy="134" r="33" fill="none" stroke="#ff9a3c" stroke-width="2" opacity="0.45"/>
+  </g>
+
+  <!-- rim for contrast on light desktops -->
+  <circle cx="128" cy="128" r="120" fill="none" stroke="#050201" stroke-width="6"/>
+</svg>

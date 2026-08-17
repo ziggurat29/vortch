@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "vortch",
+  "version-string": "0.0.1",
+  "description": "vortch - desktop job-launcher drop target",
+  "builtin-baseline": "94a541197763a4f449a1b91478df48c0584a6256",
+  "dependencies": [
+    "nlohmann-json",
+    "doctest"
+  ],
+  "features": {
+    "history": {
+      "description": "SQLite local history/log store",
+      "dependencies": [ "sqlite3" ]
+    },
+    "ui": {
+      "description": "wxWidgets cross-platform front end",
+      "dependencies": [ "wxwidgets" ]
+    }
+  }
+}
