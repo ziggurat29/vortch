@@ -398,6 +398,16 @@ interface in `vortch-core`; SQLite arrives via vcpkg.
   - **Animate only when active**: a `wxTimer` repaints at the animation fps *only*
     while an animated state is showing; quiescent = static, no timer (saves
     CPU/battery).
+  - **Pluggable renderer (contemplate early)**: the widget's drawing must go
+    through a swappable *renderer/animator* that draws frame N from
+    (state, size, phase) via `wxGraphicsContext` — NOT merely blit a scaled
+    bitmap. This enables rich per-frame renditions and **metaphor morphs**:
+    e.g. the peek→full expand growing from a small ball into an "awakening"
+    vortex with lines coming alive, or morphing the vortex into an open mouth
+    to receive a drop. The current `OnPaint` + size-interpolation is a
+    placeholder; keep the paint path delegating to a renderer so shape-morphing
+    (not just scaling) needs no rework later. Transitions (peek↔full, state
+    changes) are themselves animators, not just tweened geometry.
 - **Contrast/theming**: the icon must read on both light and dark desktops
   (contained shape + subtle outline/shadow); provide a monochrome tray/menu-bar
   variant (macOS menu bar prefers template/monochrome images).

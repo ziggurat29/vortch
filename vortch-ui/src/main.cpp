@@ -15,12 +15,16 @@ wxString AssetPath(const char* name) {
   return wxString::FromUTF8(VORTCH_ASSETS_DIR) + "/" + name;
 }
 const wxColour kAccent(49, 196, 255);  // move-mode highlight
+constexpr int kFullSize = 96;
+constexpr int kPeekSize = 32;
 } // namespace
 
-// Tray icon with a minimal menu (Quit).
+class VortchFrame;
+
+// Tray icon: show/hide the widget + quit.
 class VortchTray : public wxTaskBarIcon {
 public:
-  explicit VortchTray(const wxBitmapBundle& bundle) {
+  VortchTray(const wxBitmapBundle& bundle, wxFrame* frame) : frame_(frame) {
     wxIcon icon;
     icon.CopyFromBitmap(bundle.GetBitmap(wxSize(32, 32)));
     SetIcon(icon, "vortch");
@@ -28,39 +32,49 @@ public:
   }
   wxMenu* CreatePopupMenu() override {
     auto* menu = new wxMenu();
+    menu->Append(ID_TOGGLE, frame_->IsShown() ? "Hide widget" : "Show widget");
+    menu->AppendSeparator();
     menu->Append(wxID_EXIT, "Quit vortch");
     return menu;
   }
 private:
+  enum { ID_TOGGLE = wxID_HIGHEST + 100 };
   void OnMenu(wxCommandEvent& e) {
-    if (e.GetId() == wxID_EXIT) wxTheApp->ExitMainLoop();
+    if (e.GetId() == ID_TOGGLE)      frame_->Show(!frame_->IsShown());
+    else if (e.GetId() == wxID_EXIT) wxTheApp->ExitMainLoop();
   }
+  wxFrame* frame_;
 };
 
 enum class ZMode { Topmost, OnDesktop };
 
-// Borderless, always-on-top desktop-icon-style window (Tier C), with a context
-// menu, a "move mode" for repositioning, and a switchable z-order.
+// Borderless, always-on-top desktop-icon-style window (Tier C): context menu,
+// move mode, switchable z-order, and a "peek" mode that hover-expands.
 class VortchFrame : public wxFrame {
 public:
   explicit VortchFrame(wxBitmapBundle bundle)
-      : wxFrame(nullptr, wxID_ANY, "vortch", wxDefaultPosition, wxSize(96, 96),
+      : wxFrame(nullptr, wxID_ANY, "vortch", wxDefaultPosition,
+                wxSize(kFullSize, kFullSize),
                 wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP | wxBORDER_NONE),
         bundle_(std::move(bundle)) {
-    SetClientSize(96, 96);
+    SetClientSize(kFullSize, kFullSize);
     SetBackgroundStyle(wxBG_STYLE_PAINT);
-    moveTimer_.SetOwner(this);
-    Bind(wxEVT_PAINT,              &VortchFrame::OnPaint,       this);
-    Bind(wxEVT_CONTEXT_MENU,       &VortchFrame::OnContextMenu, this);
-    Bind(wxEVT_MENU,               &VortchFrame::OnMenu,        this);
-    Bind(wxEVT_LEFT_DOWN,          &VortchFrame::OnLeftDown,    this);
-    Bind(wxEVT_MOTION,             &VortchFrame::OnMotion,      this);
-    Bind(wxEVT_LEFT_UP,            &VortchFrame::OnLeftUp,      this);
-    Bind(wxEVT_TIMER,              &VortchFrame::OnMoveTimer,   this);
-    Bind(wxEVT_MOUSE_CAPTURE_LOST, &VortchFrame::OnCaptureLost, this);
+    escTimer_.SetOwner(this, ID_TIMER_ESC);
+    animTimer_.SetOwner(this, ID_TIMER_ANIM);
+    leaveTimer_.SetOwner(this, ID_TIMER_LEAVE);
+    Bind(wxEVT_PAINT,               &VortchFrame::OnPaint,       this);
+    Bind(wxEVT_CONTEXT_MENU,        &VortchFrame::OnContextMenu, this);
+    Bind(wxEVT_MENU,                &VortchFrame::OnMenu,        this);
+    Bind(wxEVT_LEFT_DOWN,           &VortchFrame::OnLeftDown,    this);
+    Bind(wxEVT_MOTION,              &VortchFrame::OnMotion,      this);
+    Bind(wxEVT_LEFT_UP,             &VortchFrame::OnLeftUp,      this);
+    Bind(wxEVT_ENTER_WINDOW,        &VortchFrame::OnEnter,       this);
+    Bind(wxEVT_LEAVE_WINDOW,        &VortchFrame::OnLeave,       this);
+    Bind(wxEVT_MOUSE_CAPTURE_LOST,  &VortchFrame::OnCaptureLost, this);
+    Bind(wxEVT_TIMER, &VortchFrame::OnEscTimer,   this, ID_TIMER_ESC);
+    Bind(wxEVT_TIMER, &VortchFrame::OnAnimTimer,  this, ID_TIMER_ANIM);
+    Bind(wxEVT_TIMER, &VortchFrame::OnLeaveTimer, this, ID_TIMER_LEAVE);
 #ifdef __WXMSW__
-    // Desktop-gadget behavior: interacting with the widget must not steal
-    // foreground focus from the user's active app.
     {
       HWND hwnd = static_cast<HWND>(GetHandle());
       const LONG_PTR ex = ::GetWindowLongPtr(hwnd, GWL_EXSTYLE);
@@ -82,8 +96,13 @@ public:
 #endif
 
 private:
-  enum { ID_MOVE = wxID_HIGHEST + 1, ID_Z_TOPMOST, ID_Z_ONDESKTOP };
+  enum {
+    ID_MOVE = wxID_HIGHEST + 1, ID_Z_TOPMOST, ID_Z_ONDESKTOP,
+    ID_PEEK, ID_ALLDESK,
+    ID_TIMER_ESC, ID_TIMER_ANIM, ID_TIMER_LEAVE
+  };
 
+  // ---- z-order ----
   void ApplyZMode() {
 #ifdef __WXMSW__
     HWND hwnd = static_cast<HWND>(GetHandle());
@@ -99,6 +118,59 @@ private:
 #endif
   }
 
+  // ---- peek animation (center-anchored resize) ----
+  void ResizeKeepingCenter(int s) {
+    const wxRect r = GetRect();
+    const wxPoint c(r.x + r.width / 2, r.y + r.height / 2);
+    SetSize(c.x - s / 2, c.y - s / 2, s, s);
+    Refresh();
+  }
+  void AnimateTo(int target) {
+    targetSize_ = target;
+    if (!animTimer_.IsRunning()) animTimer_.Start(16);
+  }
+  void SnapTo(int s) {
+    if (animTimer_.IsRunning()) animTimer_.Stop();
+    curSize_ = targetSize_ = s;
+    ResizeKeepingCenter(s);
+  }
+  void OnAnimTimer(wxTimerEvent&) {
+    if (curSize_ == targetSize_) { animTimer_.Stop(); return; }
+    int diff = targetSize_ - curSize_;
+    int step = diff / 4;                       // ease-out
+    if (step == 0) step = (diff > 0) ? 1 : -1;
+    curSize_ += step;
+    if ((diff > 0 && curSize_ > targetSize_) ||
+        (diff < 0 && curSize_ < targetSize_)) curSize_ = targetSize_;
+    ResizeKeepingCenter(curSize_);
+    if (curSize_ == targetSize_) animTimer_.Stop();
+  }
+  void OnEnter(wxMouseEvent& e) {
+    hovered_ = true;
+    if (peekMode_ && !moveMode_) AnimateTo(kFullSize);
+    e.Skip();
+  }
+  void OnLeave(wxMouseEvent& e) {
+    hovered_ = false;
+    if (peekMode_ && !moveMode_) leaveTimer_.StartOnce(180);
+    e.Skip();
+  }
+  void OnLeaveTimer(wxTimerEvent&) {
+    if (peekMode_ && !moveMode_ &&
+        !GetScreenRect().Contains(wxGetMousePosition())) {
+      AnimateTo(kPeekSize);
+    }
+  }
+  // Reconcile peek size to the actual cursor position (enter/leave events don't
+  // fire across a modal popup menu, so a leave during the menu is missed).
+  void ReconcilePeek() {
+    if (!peekMode_ || moveMode_) return;
+    const bool over = GetScreenRect().Contains(wxGetMousePosition());
+    hovered_ = over;
+    AnimateTo(over ? kFullSize : kPeekSize);
+  }
+
+  // ---- context menu ----
   void OnContextMenu(wxContextMenuEvent&) {
     if (moveMode_) return;
     wxMenu menu;
@@ -108,29 +180,33 @@ private:
     auto* des = menu.AppendRadioItem(ID_Z_ONDESKTOP, "Below apps (on desktop)");
     (zmode_ == ZMode::Topmost ? top : des)->Check(true);
     menu.AppendSeparator();
+    menu.AppendCheckItem(ID_PEEK, "Peek mode (hover to expand)")->Check(peekMode_);
+    auto* all = menu.AppendCheckItem(ID_ALLDESK, "Show on all desktops");
+    all->Check(allDesktops_);
+#ifdef __WXMSW__
+    all->Enable(false);  // deferred on Windows (needs undocumented virtual-desktop API)
+#endif
+    menu.AppendSeparator();
     menu.Append(wxID_EXIT, "Quit vortch");
+
     pendingMove_ = false;
 #ifdef __WXMSW__
-    // A popup menu only dismisses correctly (click-away / Esc) and avoids
-    // foregrounding its owner on selection when the owner IS foreground. Since
-    // we're WS_EX_NOACTIVATE, briefly foreground the widget for the menu.
     HWND self   = static_cast<HWND>(GetHandle());
     HWND prevFg = ::GetForegroundWindow();
     ::SetForegroundWindow(self);
     PopupMenu(&menu);
     if (pendingMove_) {
-      // Move needs mouse capture, which requires staying foreground. Enter now
-      // (menu closed, still foreground) and restore focus when the move ends.
       pendingMove_     = false;
       savedForeground_ = prevFg;
       EnterMoveMode();
     } else if (prevFg && prevFg != self) {
-      ::SetForegroundWindow(prevFg);  // restore focus for non-move commands
+      ::SetForegroundWindow(prevFg);
     }
 #else
     PopupMenu(&menu);
     if (pendingMove_) { pendingMove_ = false; EnterMoveMode(); }
 #endif
+    if (!moveMode_) ReconcilePeek();
   }
 
   void OnMenu(wxCommandEvent& e) {
@@ -138,22 +214,29 @@ private:
       case ID_MOVE:        pendingMove_ = true; break;  // deferred until menu closes
       case ID_Z_TOPMOST:   zmode_ = ZMode::Topmost;   ApplyZMode(); break;
       case ID_Z_ONDESKTOP: zmode_ = ZMode::OnDesktop; ApplyZMode(); break;
-      case wxID_EXIT:      wxTheApp->ExitMainLoop();   break;
+      case ID_ALLDESK:     allDesktops_ = e.IsChecked(); /* TODO platform apply */ break;
+      case ID_PEEK:
+        peekMode_ = e.IsChecked();
+        if (peekMode_) { if (!hovered_ && !moveMode_) AnimateTo(kPeekSize); }
+        else AnimateTo(kFullSize);
+        break;
+      case wxID_EXIT:      wxTheApp->ExitMainLoop(); break;
       default: e.Skip();
     }
   }
 
+  // ---- move mode ----
   void EnterMoveMode() {
     moveMode_    = true;
     dragging_    = false;
     originalPos_ = GetPosition();
+    SnapTo(kFullSize);                       // move at full size
     SetCursor(wxCursor(wxCURSOR_SIZING));
     if (!HasCapture()) CaptureMouse();
-    moveTimer_.Start(25);  // poll Esc (borderless window can't rely on focus)
+    escTimer_.Start(25);                      // poll Esc (no reliable focus)
 #ifdef __WXMSW__
-    // Temporarily float on top while moving, regardless of z-mode.
     ::SetWindowPos(static_cast<HWND>(GetHandle()), HWND_TOPMOST, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);  // temp topmost
 #else
     Raise();
 #endif
@@ -162,24 +245,25 @@ private:
 
   void ExitMoveMode(bool revert) {
     if (!moveMode_) return;
-    moveTimer_.Stop();
+    escTimer_.Stop();
     if (revert) Move(originalPos_);
     moveMode_ = false;
     dragging_ = false;
     if (HasCapture()) ReleaseMouse();
     SetCursor(wxNullCursor);
-    ApplyZMode();  // re-assert z-order after moving
+    ApplyZMode();
 #ifdef __WXMSW__
     if (savedForeground_) {
       HWND fg = static_cast<HWND>(savedForeground_);
       savedForeground_ = nullptr;
-      ::SetForegroundWindow(fg);  // hand focus back to the user's app
+      ::SetForegroundWindow(fg);
     }
 #endif
+    if (peekMode_ && !hovered_) AnimateTo(kPeekSize);
     Refresh();
   }
 
-  void OnMoveTimer(wxTimerEvent&) {
+  void OnEscTimer(wxTimerEvent&) {
     if (moveMode_ && wxGetKeyState(WXK_ESCAPE)) ExitMoveMode(/*revert=*/true);
   }
 
@@ -191,10 +275,9 @@ private:
       dragMouseStart_ = mouse;
       dragWinStart_   = GetPosition();
     } else {
-      ExitMoveMode(/*revert=*/false);  // click off-window cancels
+      ExitMoveMode(/*revert=*/false);
     }
   }
-
   void OnMotion(wxMouseEvent& e) {
     if (moveMode_ && dragging_ && e.Dragging() && e.LeftIsDown()) {
       const wxPoint delta = wxGetMousePosition() - dragMouseStart_;
@@ -203,15 +286,10 @@ private:
       e.Skip();
     }
   }
-
   void OnLeftUp(wxMouseEvent& e) {
-    if (moveMode_ && dragging_) {
-      ExitMoveMode(/*revert=*/false);  // release commits
-    } else {
-      e.Skip();
-    }
+    if (moveMode_ && dragging_) ExitMoveMode(/*revert=*/false);
+    else e.Skip();
   }
-
   void OnCaptureLost(wxMouseCaptureLostEvent&) {
     if (moveMode_) ExitMoveMode(/*revert=*/true);
   }
@@ -231,11 +309,16 @@ private:
   }
 
   wxBitmapBundle bundle_;
-  wxTimer moveTimer_;
+  wxTimer escTimer_, animTimer_, leaveTimer_;
   ZMode   zmode_       = ZMode::Topmost;
   bool    moveMode_    = false;
   bool    dragging_    = false;
   bool    pendingMove_ = false;
+  bool    peekMode_    = false;
+  bool    allDesktops_ = false;
+  bool    hovered_     = false;
+  int     curSize_     = kFullSize;
+  int     targetSize_  = kFullSize;
   WXHWND  savedForeground_ = nullptr;
   wxPoint originalPos_;
   wxPoint dragMouseStart_;
@@ -257,19 +340,13 @@ public:
     frame_->Centre();
     frame_->Show();
 
-    tray_ = new VortchTray(bundle);
+    tray_ = new VortchTray(bundle, frame_);
     return true;
   }
-
   int OnExit() override {
-    if (tray_) {
-      tray_->RemoveIcon();
-      delete tray_;
-      tray_ = nullptr;
-    }
+    if (tray_) { tray_->RemoveIcon(); delete tray_; tray_ = nullptr; }
     return 0;
   }
-
 private:
   VortchFrame* frame_ = nullptr;
   VortchTray*  tray_  = nullptr;
