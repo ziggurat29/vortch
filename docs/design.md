@@ -363,21 +363,31 @@ frozen hierarchy) and one-relation-per-kind (`kind` = table name, not queryable)
 - `local` — non-replicated machine/replica identity.
 
 **Visual mode & the vortex object.**
-- A **vortex is a `kind='vortex'` object**; its `body` holds its parameters (label,
-  icon ref, placement = position/size/monitor, and `params` that registered
-  processors can query). `facets.machines` scopes it (per-machine).
+- A **vortex is a `kind='vortex'` object**. `object.name` is its user presentation
+  name; `body` holds `icon` (resource ref), `params` (processor-queryable), and a
+  `visual` container (below). `facets.machines` scopes it (per-machine).
 - **Visual mode is a distinct, named, typed sub-object ("lump")** that MANY object
-  kinds can carry (a vortex, or a machine/global config supplying defaults) — so it
-  can later be resolved **most-specific-wins** across a set of disparately-typed
-  objects. It is **kind-specific**: the vortex visual lump (`zmode`, `peek`, …)
-  differs from a future job-status-UI visual lump. Shape:
-  `body.visual = { "vortex": { zmode, peek }, "<other>": {…} }` — a container keyed
-  by visual-mode type so one object can carry several.
-- **v1 simplicity**: attach the visual lump **only to the vortex object**; no
-  hierarchical resolution yet (later: extract the same-shaped lump from
-  machine/global objects and merge). **Placement** (position/size/monitor) stays in
-  the vortex body proper (inherently per-instance/per-machine), NOT in the
-  shareable visual lump.
+  kinds can carry (a vortex, a machine/global config supplying defaults, or a
+  per-machine override) — resolved **most-specific-wins, field-by-field** across a
+  set of disparately-typed objects. It is **kind-specific**: the vortex visual lump
+  differs from a future job-status-UI lump. Shape:
+  `body.visual = { "vortex": { position, monitor, size, zmode, peek, … }, "<other>": {…} }`
+  — keyed by visual-mode type so one object can carry several. **All visual
+  properties live in the lump, including placement** (position/monitor/size), since
+  they are all "visual".
+- Merge is **field-level**, so instance-only fields (`position`) come from the
+  instance while fields with higher-level defaults (`zmode`, `peek`, maybe `size`)
+  resolve most-specific-wins. This is what makes **per-machine placement of a roamed
+  vortex** possible later: a machine-scoped override object carries a *partial*
+  `visual.vortex` (e.g. just `position`/`monitor`).
+- **v1 simplicity**: attach the visual lump **only to the vortex object** (its
+  `visual.vortex` holds everything); no hierarchical resolution / overrides yet.
+- **Persisted config vs. runtime display**: `object.name` is the persisted
+  *management* label; the **on-screen label text is a runtime value** (initialized
+  from `name`, mutable to convey ephemeral state, NOT persisted). `body.icon` is
+  the persisted *base identity*, overlaid at runtime by the status badge. The
+  `visual` lump is visual *preferences/config*, never ephemeral state — so there
+  is no persisted "display text" field.
 
 **Bootstrap invariant (fixed forever — defined now).** Kept in the SQLite *file
 header* (not a table), so it's readable pre-schema and immune to every future
