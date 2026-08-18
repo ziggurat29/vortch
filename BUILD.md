@@ -48,6 +48,19 @@ bash scripts/build.sh full     # slow first time: builds wxWidgets (GTK)
 ```
 No `vcvars` needed on Linux; `scripts/build.sh` drives cmake/ctest directly.
 
+**Current Linux status (spot-check expectations).** The portable core + Store are
+fully cross-platform. In the UI, these are **Windows-only today** (no-ops/stubs
+elsewhere, guarded by `#ifdef __WXMSW__`): the z-order toggle (topmost / below-apps),
+the non-activating window (`WS_EX_NOACTIVATE`), the context-menu foreground handling,
+and autostart (`--enable/--disable-autostart` return false; `platform_linux.cpp` is
+a stub). So on Linux expect: widgets render, and drag-drop + move + peek work, but
+the z-mode menu items do nothing yet and autostart isn't wired. The **system tray**
+(`wxTaskBarIcon`) depends on the desktop's notification area — MATE's should work,
+but if it doesn't appear that's a known DE-dependent wx limitation, not a vortch bug.
+Build `core` first (fast — proves the Store compiles + tests pass under gcc), then
+`full`. `VORTCH_ASSETS_DIR` is baked to the repo's `assets/` at build time, so the
+dev build runs from anywhere.
+
 ## Notes
 - The wxWidgets (`full`) build can take many minutes the first time; run it
   detached so it is not interrupted.

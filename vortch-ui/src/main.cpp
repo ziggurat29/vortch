@@ -366,7 +366,7 @@ private:
   bool    dragOver_    = false;
   int     curSize_     = kFullSize;
   int     targetSize_  = kFullSize;
-  WXHWND  savedForeground_ = nullptr;
+  void*   savedForeground_ = nullptr;  // HWND on MSW; only used under __WXMSW__
   wxPoint originalPos_, dragMouseStart_, dragWinStart_;
 };
 
