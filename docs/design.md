@@ -335,7 +335,12 @@ frozen hierarchy) and one-relation-per-kind (`kind` = table name, not queryable)
     selection and sub-typing, via JSON1.
   - `body`: kind-specific JSON blob; usually read/written whole, rarely queried
     (index sub-fields via a generated column only if a need arises).
-  - `created`/`modified`: timestamps for audit + last-writer-wins merge.
+  - `created`/`modified`: **int64 unix seconds (UTC)** for audit + last-writer-wins
+    merge. Maintained **explicitly in code, NOT via triggers** — a trigger would
+    stamp the local clock on every write, clobbering the source `modified` a merge
+    must preserve for LWW.
+  - `objects`/`meta`/`local` are **`WITHOUT ROWID`** (natural TEXT primary keys);
+    `logs` keeps a rowid + AUTOINCREMENT (append-only, ordered by id).
 - **Specialized tables where performance matters** (e.g. **logs/history**):
   intrinsically kind-ed (no `kind` column); real indexed columns for hot fields
   (`timestamp`, `machine`, `user`, `instance`, `level`, …); body JSON optional;
@@ -356,6 +361,23 @@ frozen hierarchy) and one-relation-per-kind (`kind` = table name, not queryable)
 - `logs` — specialized, indexed (perf-critical).
 - `meta` — extensible `key`/`value` metadata (may evolve freely).
 - `local` — non-replicated machine/replica identity.
+
+**Visual mode & the vortex object.**
+- A **vortex is a `kind='vortex'` object**; its `body` holds its parameters (label,
+  icon ref, placement = position/size/monitor, and `params` that registered
+  processors can query). `facets.machines` scopes it (per-machine).
+- **Visual mode is a distinct, named, typed sub-object ("lump")** that MANY object
+  kinds can carry (a vortex, or a machine/global config supplying defaults) — so it
+  can later be resolved **most-specific-wins** across a set of disparately-typed
+  objects. It is **kind-specific**: the vortex visual lump (`zmode`, `peek`, …)
+  differs from a future job-status-UI visual lump. Shape:
+  `body.visual = { "vortex": { zmode, peek }, "<other>": {…} }` — a container keyed
+  by visual-mode type so one object can carry several.
+- **v1 simplicity**: attach the visual lump **only to the vortex object**; no
+  hierarchical resolution yet (later: extract the same-shaped lump from
+  machine/global objects and merge). **Placement** (position/size/monitor) stays in
+  the vortex body proper (inherently per-instance/per-machine), NOT in the
+  shareable visual lump.
 
 **Bootstrap invariant (fixed forever — defined now).** Kept in the SQLite *file
 header* (not a table), so it's readable pre-schema and immune to every future
@@ -389,6 +411,12 @@ and the *status/badge* model are unchanged.
 **Still open (this area)**: confirm
 the `facets` empty/absent = matches-all convention; history replication/pruning
 policy; facet-query indexing only if object counts ever grow.
+- **`--install` vs. portable / per-user DB (needs thought).** `--install` writing
+  a Run key is inherently *not* portable. If the exe is a **single shared instance**
+  (e.g. `Program Files` / `/usr/share/bin`), the DB must be **per-user**, not next
+  to the exe — so `--install` should likely choose and **bake a per-user
+  `--data-dir`** into the `--startup` command (and detect a non-writable exe dir).
+  Resolution = refining CLI args + minor runtime behavior; deferred.
 
 ## Implementation decisions log (settled)
 

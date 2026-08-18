@@ -8,8 +8,7 @@
   `history` feature -> sqlite3; `ui` feature -> wxWidgets.
 
 ## Presets
-- `core`        - portable `vortch-core` + unit tests. No UI, no sqlite. Fast.
-- `core-sqlite` - core + the SQLite history store.
+- `core`        - portable `vortch-core` (incl. the SQLite Store) + unit tests. No UI.
 - `full`        - everything incl. the wxWidgets `vortch-ui`. First build is
   slow (wxWidgets compiles from source).
 - `full-static` - like `full` but `x64-windows-static` triplet + static CRT

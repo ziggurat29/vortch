@@ -6,13 +6,10 @@
   "builtin-baseline": "94a541197763a4f449a1b91478df48c0584a6256",
   "dependencies": [
     "nlohmann-json",
-    "doctest"
+    "doctest",
+    "sqlite3"
   ],
   "features": {
-    "history": {
-      "description": "SQLite local history/log store",
-      "dependencies": [ "sqlite3" ]
-    },
     "ui": {
       "description": "wxWidgets cross-platform front end",
       "dependencies": [ "wxwidgets" ]

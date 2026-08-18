@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(VORTCH_BUILD_UI     "Build the wxWidgets front end (vortch-ui)" OFF)
-option(VORTCH_WITH_SQLITE  "Build the SQLite history store"            OFF)
 option(VORTCH_BUILD_TESTS  "Build vortch-core unit tests"              ON)
 
 if(VORTCH_BUILD_TESTS)

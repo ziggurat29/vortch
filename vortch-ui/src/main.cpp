@@ -3,13 +3,22 @@
 #include <wx/dcbuffer.h>
 #include <wx/taskbar.h>
 #include <wx/dnd.h>
+#include <wx/hyperlink.h>
 
 #include <string>
 #include <vector>
 
+#include <wx/stdpaths.h>
+#include <wx/filename.h>
+#include <wx/utils.h>
+#include <optional>
+#include <filesystem>
+
 #include "config.hpp"
 #include "platform.hpp"
 #include "vortch/launch.hpp"
+#include "vortch/store.hpp"
+#include "vortch/text.hpp"
 
 namespace {
 wxString AssetPath(const char* name) {
@@ -18,6 +27,15 @@ wxString AssetPath(const char* name) {
 const wxColour kAccent(49, 196, 255);  // move-mode highlight
 constexpr int kFullSize = 96;
 constexpr int kPeekSize = 32;
+
+bool hasFlag(const std::vector<std::string>& a, const char* f) {
+  for (const auto& s : a) if (s == f) return true;
+  return false;
+}
+std::string flagValue(const std::vector<std::string>& a, const char* f) {
+  for (std::size_t i = 0; i + 1 < a.size(); ++i) if (a[i] == f) return a[i + 1];
+  return {};
+}
 } // namespace
 
 class VortchFrame;
@@ -368,28 +386,141 @@ class VortchApp : public wxApp {
 public:
   bool OnInit() override {
     std::vector<std::string> args;
-    args.reserve(argc);
-    for (int i = 0; i < argc; ++i) args.push_back(argv[i].ToStdString());
-    (void)vortch::parseVortchId(args);
+    for (int i = 1; i < argc; ++i) args.push_back(argv[i].ToStdString());
 
+    const bool fInit    = hasFlag(args, "--init");
+    const bool fStartup = hasFlag(args, "--startup");
+    const bool fInstall = hasFlag(args, "--install");
+    const bool fUninst  = hasFlag(args, "--uninstall");
+    const bool fEnable  = hasFlag(args, "--enable-autostart");
+    const bool fDisable = hasFlag(args, "--disable-autostart");
+    const bool fForce   = hasFlag(args, "--force");
+    const bool fNoLaunch= hasFlag(args, "--nolaunch");
+    const bool fWelcome = hasFlag(args, "--welcome");
+
+    // Resolve the store location: exe folder by default, or --data-dir.
+    const wxString exePath  = wxStandardPaths::Get().GetExecutablePath();
+    const std::string ddArg = flagValue(args, "--data-dir");
+    wxString dataDir = ddArg.empty() ? wxFileName(exePath).GetPath()
+                                     : wxString::FromUTF8(ddArg);
+    const std::filesystem::path dbPath =
+        vortch::utf8ToPath(dataDir.utf8_string()) / "vortch.db";
+
+    if (!(fInit || fStartup || fInstall || fUninst || fEnable || fDisable)) {
+      ShowInfo();
+      return false;                                   // bare / double-click
+    }
+
+    const bool doInit    = fInit || fInstall;
+    const bool doEnable  = fEnable || fInstall;
+    const bool doDisable = fDisable || fUninst;
+
+    if (doInit && !InitStore(dbPath, fForce)) return false;
+
+    if (doEnable) {
+      std::string cmd = "\"" + std::string(exePath.utf8_string()) + "\" --startup";
+      if (!ddArg.empty()) cmd += " --data-dir \"" + ddArg + "\"";
+      if (!vortch::installAutostart(cmd))
+        wxMessageBox("Could not enable autostart.", "vortch", wxOK | wxICON_WARNING);
+    }
+    if (doDisable) vortch::uninstallAutostart();
+
+    const bool run = fStartup || (fInstall && !fNoLaunch);
+    if (!run) {
+      wxString msg = "vortch: done.";
+      if (doInit)    msg += "\n  - store initialized";
+      if (doEnable)  msg += "\n  - autostart enabled";
+      if (doDisable) msg += "\n  - autostart disabled";
+      wxMessageBox(msg, "vortch", wxOK | wxICON_INFORMATION);
+      return false;
+    }
+
+    // ---- run ----
+    if (!std::filesystem::exists(dbPath)) {
+      wxMessageBox("Not initialized. Run with --install (or --init) first.",
+                   "vortch", wxOK | wxICON_ERROR);
+      return false;
+    }
+    try {
+      store_ = vortch::Store::open(dbPath);
+    } catch (const std::exception& e) {
+      wxMessageBox(wxString("Could not open store: ") + e.what(),
+                   "vortch", wxOK | wxICON_ERROR);
+      return false;
+    }
+
+    { vortch::LogEntry e; e.level = "info";
+      e.machine = wxGetHostName().utf8_string();
+      e.user = wxGetUserId().utf8_string();
+      e.body["event"] = "startup";
+      store_->appendLog(e); }
+
+    if (fWelcome || store_->getMeta("welcomed").value_or("false") != "true") {
+      wxMessageBox("Welcome to vortch!\n(placeholder welcome screen)",
+                   "vortch", wxOK | wxICON_INFORMATION);
+      store_->setMeta("welcomed", "true");
+    }
+
+    // Single hard-coded widget for now; DB-driven instances are the next slice.
     wxBitmapBundle bundle =
         wxBitmapBundle::FromSVGFile(AssetPath("icon.svg"), wxSize(256, 256));
-
     frame_ = new VortchFrame(bundle);
     frame_->Centre();
     frame_->Show();
     frame_->SetDropTarget(new VortchDropTarget(frame_));
-
     tray_ = new VortchTray(bundle, frame_);
     return true;
   }
+
   int OnExit() override {
     if (tray_) { tray_->RemoveIcon(); delete tray_; tray_ = nullptr; }
     return 0;
   }
+
 private:
+  void ShowInfo() {
+    wxDialog dlg(nullptr, wxID_ANY, "vortch");
+    auto* sizer = new wxBoxSizer(wxVERTICAL);
+    auto* text  = new wxStaticText(&dlg, wxID_ANY,
+        "vortch - a desktop job-launcher drop target.\n\n"
+        "It normally starts automatically at login. To set it up:\n\n"
+        "    vortch --install      set up + enable autostart + run\n"
+        "    vortch --uninstall    remove autostart");
+    auto* link  = new wxHyperlinkCtrl(&dlg, wxID_ANY,
+        "https://github.com/ziggurat29/vortch",
+        "https://github.com/ziggurat29/vortch");
+    sizer->Add(text, 0, wxALL, 16);
+    sizer->Add(link, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
+    sizer->Add(dlg.CreateButtonSizer(wxOK), 0,
+               wxALIGN_RIGHT | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+    dlg.SetSizerAndFit(sizer);
+    dlg.Centre();
+    dlg.ShowModal();
+  }
+
+  bool InitStore(const std::filesystem::path& dbPath, bool force) {
+    if (std::filesystem::exists(dbPath) && !force) {
+      wxMessageBox(wxString::FromUTF8(vortch::pathToUtf8(dbPath)) +
+                       "\n\nAlready initialized. Use --force to reinitialize.",
+                   "vortch", wxOK | wxICON_WARNING);
+      return false;
+    }
+    if (force) { std::error_code ec; std::filesystem::remove(dbPath, ec); }
+    try {
+      vortch::Store s = vortch::Store::open(dbPath);
+      s.setMeta("database_id", vortch::newUuid());
+      s.setMeta("created", std::to_string(vortch::nowUnix()));
+      s.setMeta("welcomed", "false");
+    } catch (const std::exception& e) {
+      wxMessageBox(wxString("Init failed: ") + e.what(), "vortch", wxOK | wxICON_ERROR);
+      return false;
+    }
+    return true;
+  }
+
   VortchFrame* frame_ = nullptr;
   VortchTray*  tray_  = nullptr;
+  std::optional<vortch::Store> store_;
 };
 
 wxIMPLEMENT_APP(VortchApp);
