@@ -21,6 +21,9 @@
   `char8_t`/`std::u8string`. Convert only at OS boundaries via `vortch/text.hpp`
   (Win32 wide APIs / filesystem paths on Windows) and `wxString::FromUTF8`.
 - **Windows floor**: Windows 7 (`_WIN32_WINNT=0x0601`). XP is out of scope.
+- **DB migrations (pre-release)**: do NOT write migrations yet — schema changes
+  are free; wipe-and-reinstall the SQLite DB to adopt them. Real migrations only
+  after the first public release.
 
 ## Line endings (LF, enforced)
 All tracked text is **LF** in both the object store and the working tree.

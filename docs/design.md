@@ -227,6 +227,169 @@ borderless frame and the icon/badge are custom-drawn.
 
 ---
 
+## Deployment & storage model (supersedes earlier storage / roaming / config-root decisions)
+
+**Installation — portable ("portable apps" style), no installer.**
+- The app runs from wherever it lives; that folder is its home. No
+  `%LOCALAPPDATA%`, no MSI/installer. Uninstall = delete the folder (+ remove any
+  autostart hook).
+- **`--init`** designates the current location as the install and creates the
+  local SQLite store there. Store creation and autostart registration are
+  **separate** concerns (autostart likely a distinct verb — see **CLI verbs**).
+- **Data-dir override**: a command-line **`--data-dir <path>`** points the store
+  elsewhere. Escape hatch, and a real case: a system-wide `vortch` (e.g.
+  `/usr/share/bin`) with each user's DB under their home. **CLI-only** (env vars
+  are awkward at the launch site; the override can be baked into the autostart
+  command / launch script). The store's own location is therefore NOT stored in
+  the store — bootstrapped from exe-folder default or `--data-dir`.
+
+**Autostart — a separate initialization concern.**
+- Conceded: on Windows this uses the **HKCU Run key** (so: *not* strictly
+  no-registry). Linux `~/.config/autostart/*.desktop`; macOS Login Item.
+- Kept distinct from `--init` (which is about the DB). Likely a separate verb
+  (e.g. `--install-autostart` / `--uninstall-autostart`) — see **CLI verbs**. The
+  autostart command may embed `--data-dir`.
+
+**CLI verbs & first-run.**
+- *(no args — e.g. double-clicked in Explorer)*: show an **info message box**
+  (what vortch is + brief how-to + a project link, stubbed to GitHub for now). No
+  side effects, no run. (Guards the inevitable double-click.)
+- `--startup`: **run normally** (recreate vortices, widgets, tray). This is what
+  the autostart hook invokes. Requires an initialized store (default: exe folder,
+  or `--data-dir`); if missing, show an error/info box.
+- **High-level (typical user):**
+  - `--install` = `--init` + `--enable-autostart`, then **launches** (`--startup`)
+    unless `--nolaunch`. Accepts `--data-dir`, `--force`, `--nolaunch`.
+  - `--uninstall` = `--disable-autostart` today, kept a separate verb (may do more
+    later, e.g. offer to remove the store).
+- **Fine-grained:**
+  - `--init`: create the store at the exe folder (or `--data-dir`): set header
+    pragmas, create `objects`/`logs`/`meta`/`local`, seed `meta` (database-id GUID,
+    created ts, `welcomed=false`) + `local` (machine identity). **Refuses if a
+    store already exists** unless `--force` (destructive re-init).
+  - `--enable-autostart` / `--disable-autostart`: write/remove the login hook
+    (Windows Run key / Linux `.desktop` / macOS Login Item), **baking exe path +
+    `--data-dir` (if any) + `--startup`** into the hook command.
+- **Options:** `--data-dir <path>` (store location — used by init/install/enable/
+  startup; "remembered" ONLY by being baked into the autostart hook, never stored
+  in the DB); `--force` (allow destructive re-init); `--nolaunch` (suppress the
+  post-`--install` launch).
+- **First-run welcome**: a `meta.welcomed` flag — the first `--startup` shows a
+  welcome once, then sets it; `--welcome` forces it (testing / re-show).
+
+**Storage — one SQLite store for everything.**
+- A single SQLite file (next to the exe, or at `--data-dir`) holds **config AND
+  history/log** — no separate `config.json`. Tidiness + transactions + queries.
+- **JSON blobs in columns** where a value is really an object (instance `params`,
+  settings) — not shredded into columns; SQLite **JSON1** for light queries. Our
+  nlohmann serialization becomes the per-row blob encoder; `ConfigDocument`
+  becomes an in-memory shape hydrated from / persisted to rows, not a file.
+- **Table split** lets replication policy differ: config tables can replicate
+  while history/log tables stay machine-local / prunable.
+
+**Scoping — a `facets` JSON column (flat object store; the `scopeid` idea is dropped).**
+- No intrinsic hierarchy. The DB is an object store; most objects carry a **`facets`**
+  JSON blob, e.g. `{ "machines": [...], "users": [...], "groups": [...], ... }`.
+  Categories are **open-ended** — add freely, no schema change (this achieves the
+  loose-coupling the `scopeid` was for, more simply).
+- Selection is SQL over the blob via SQLite **JSON1**, e.g. objects whose
+  `facets.machines` include this machine:
+  `... WHERE EXISTS (SELECT 1 FROM json_each(facets,'$.machines') WHERE value = :machine)`
+  (or the `->>` operators). Combine categories with `AND`/`OR`.
+- **Empty/absent list = unrestricted (matches all)** — the flat equivalent of
+  "global"; every filter is "list empty/absent OR contains me". An object with
+  `{}` facets is fully global. *(confirm)*
+- No resolver subsystem: the "resolver" reduces to gathering ambient facts
+  (machine name / hostname, user, active groups) and building the `WHERE` clause.
+  Machine identity = hostname or a stored local id (no GUID resolution).
+- Groups are organizational/selection facets for now; group-carried config (a
+  separate group-settings object) is deferred.
+- **Groups (future) become a separate, genuinely hierarchical table.** By our own
+  design groups form a hierarchy, defined **only in the groups table, never in
+  objects**. An object's `facets.groups` holds **node associations**: the id(s) of
+  the specific group node(s) it belongs to (an object can belong to several, and a
+  node may be **interior or leaf**). It is **NOT an arc association** — you store
+  the endpoint node, not the full path of names down the tree; ancestry is not
+  stored on the object. The hierarchy is resolved at query time against the groups
+  table: a group-involving query **expands the target group to its subtree**
+  (group + descendants — e.g. a recursive CTE over the groups table), then matches
+  objects (via `json_each`) whose `facets.groups` intersect that
+  set, so **subgroup membership is included**. Deferred; noted so the facet shape
+  stays compatible.
+
+**Data model (SQLite) — hybrid: one polymorphic table + specialized tables.**
+Not a general object DB; small dataset. Avoid one-giant-JSON (bad updates/queries,
+frozen hierarchy) and one-relation-per-kind (`kind` = table name, not queryable).
+- **Polymorphic object table** (config, processor registrations, etc.):
+  `object( id, kind, name, facets, body, created, modified )`
+  - `id`: **GUID** surrogate key — NOT autoincrement int, so rows are globally
+    unique and a replica merge is a union (required by the replication goal).
+  - `kind`: discriminator enum ('config','processor', …), coarse + stable,
+    parametrically queryable. Fine-grained **sub-types are expressed via `facets`**
+    (e.g. app settings = `kind='config'` + a sub-type facet), NOT by proliferating
+    `kind` — keeping the enum small.
+  - `name`: a free-form, **user-editable presentation name** (display label) —
+    NOT a key. A specific/singleton object is identified by `id`, or by `kind` +
+    a `facets` match (singleton enforced by app logic), never by `name`.
+  - `facets`: free-form JSON (`{ machines:[], users:[], groups:[], … }`) for both
+    selection and sub-typing, via JSON1.
+  - `body`: kind-specific JSON blob; usually read/written whole, rarely queried
+    (index sub-fields via a generated column only if a need arises).
+  - `created`/`modified`: timestamps for audit + last-writer-wins merge.
+- **Specialized tables where performance matters** (e.g. **logs/history**):
+  intrinsically kind-ed (no `kind` column); real indexed columns for hot fields
+  (`timestamp`, `machine`, `user`, `instance`, `level`, …); body JSON optional;
+  NOT via the `facets` mechanism. Prunable; typically not replicated (or selectively).
+- **Meta vs. local**: `meta(key,value)` holds at least `schema_version` (drives
+  migration on open). The machine-local **replica identity** (hostname/local-id)
+  lives in a distinguished `local` row/table kept OUT of replication.
+- **Facet semantics are contextual (per-category), not one global rule**: each
+  category documents whether empty/absent means *match-all* (restriction-style,
+  e.g. `machines`) or *match-none* (membership-style, e.g. `groups`). The Store
+  offers a predicate helper for each form.
+- **Replication/merge (future)**: GUID ids + `modified` enable last-writer-wins;
+  deletes need **tombstones** (soft-delete) so a delete propagates instead of
+  resurrecting on merge — deferred, but shapes the id/timestamp choices now.
+
+**Tables.**
+- `objects` — the polymorphic collection above.
+- `logs` — specialized, indexed (perf-critical).
+- `meta` — extensible `key`/`value` metadata (may evolve freely).
+- `local` — non-replicated machine/replica identity.
+
+**Bootstrap invariant (fixed forever — defined now).** Kept in the SQLite *file
+header* (not a table), so it's readable pre-schema and immune to every future
+migration:
+- `PRAGMA application_id = 0x564F5254` (ASCII "VORT") — sanity check that a file
+  is a vortch DB; refuse to open otherwise.
+- `PRAGMA user_version = <schema_version>` — starts at **1**; on open, if
+  `< current`, run migrations.
+Everything else (database-id GUID, created timestamp, …) lives in the evolvable
+`meta` table; only these two header pragmas are the permanent invariant.
+
+**Pre-release migration policy (until first public release).** During this early,
+tumultuous phase there are NO deployed instances, so schema changes are made
+**freely, without writing migrations** — a **wipe-and-reinstall** (delete the DB /
+`--init` fresh) is the expected way to adopt a schema change. Do NOT invest in
+migration machinery yet; bump `user_version` only if convenient. This luxury ends
+at the first public release, after which real migrations become required.
+
+**Roaming — DB replication + scope filtering.**
+- A user's whole DB can be the totality of all vortices across machines/accounts;
+  **portability = synchronizing replicas**, each machine `SELECT`ing its rows by
+  matching `facets`. Supersedes the earlier "single roamable JSON package +
+  machine-local history" framing.
+
+**Supersedes**: the earlier *Persistence* (single JSON config file), *Roaming
+reality* (single portable package), the *Config file container* JSON-**file**
+shape (now row blobs), and all `%LOCALAPPDATA%`/`%APPDATA%` config-root references.
+The *SQLite store* decision is expanded (now holds config too). Instance *fields*
+and the *status/badge* model are unchanged.
+
+**Still open (this area)**: confirm
+the `facets` empty/absent = matches-all convention; history replication/pruning
+policy; facet-query indexing only if object counts ever grow.
+
 ## Implementation decisions log (settled)
 
 - **UI toolkit**: wxWidgets 3.3.x (vcpkg installed 3.3.3) (see toolkit section).
@@ -235,7 +398,8 @@ borderless frame and the icon/badge are custom-drawn.
 - **JSON library**: nlohmann/json (header-only).
 - **Process model**: a single manager process hosts N vortch windows (simpler
   tray/global-config/clean-uninstall story than N independent processes).
-- **Persistence**: a **single config file** (one self-contained "package"),
+- **Persistence** *(SUPERSEDED — see "Deployment & storage model": now a single
+  SQLite store, not a JSON file)*: a **single config file** (one self-contained "package"),
   rewritten atomically by the owning process. Chosen to keep all config in one
   unit that can eventually roam / be synced.
 - **Windows autostart**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
@@ -275,14 +439,14 @@ borderless frame and the icon/badge are custom-drawn.
   are deferred (needed only for system-wide install and SmartScreen/Gatekeeper
   trust).
 
-### Roaming reality (context for the single-file choice)
+### Roaming reality (SUPERSEDED — see "Deployment & storage model"; roaming is now DB replication + `scopeid` filtering)
 Automatic config roaming is NOT a free OS feature: Windows `%APPDATA%\Roaming`
 only syncs under domain roaming profiles; macOS needs iCloud + sandbox opt-in;
 Linux has no standard. The portable path is a single self-contained file the
 user (or a future sync feature) moves as a unit — hence embedded icon data and
 tolerant, advisory placement fields.
 
-### Config file container (draft shape)
+### Config file container (SUPERSEDED as a *file* — the shape now informs SQLite row blobs; see "Deployment & storage model")
 ```jsonc
 {
   "schemaVersion": 1,
