@@ -82,8 +82,12 @@ public:
   wxMenu* CreatePopupMenu() override {
     auto* m = new wxMenu();
     m->Append(ID_NEW, "New vortex");
-    auto* toggle = m->Append(ID_TOGGLE,
-                             ctrl_->anyVisible() ? "Hide vortices" : "Show vortices");
+    const std::size_t n = ctrl_->vortexCount();
+    const char* verb = ctrl_->anyVisible() ? "Hide" : "Show";
+    const char* noun = (n == 1) ? "vortex" : "vortices";
+    auto* toggle = m->Append(
+        ID_TOGGLE,
+        wxString::Format("%s %zu %s", verb, n, noun));
     if (!ctrl_->hasVortices()) toggle->Enable(false);
     m->AppendSeparator();
     m->Append(ID_QUIT, "Quit vortch");
