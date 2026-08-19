@@ -1,5 +1,6 @@
 #include <wx/wx.h>
 #include <wx/bmpbndl.h>
+#include <wx/region.h>
 #include <wx/dcbuffer.h>
 #include <wx/taskbar.h>
 #include <wx/dnd.h>
@@ -15,15 +16,18 @@
 #include <string>
 #include <vector>
 
-#include "config.hpp"
+#include "embedded_assets.hpp"
 #include "platform.hpp"
 #include "vortch/launch.hpp"
 #include "vortch/store.hpp"
 #include "vortch/text.hpp"
 
 namespace {
-wxString AssetPath(const char* name) {
-  return wxString::FromUTF8(VORTCH_ASSETS_DIR) + "/" + name;
+// Build a bitmap bundle from an SVG asset embedded in the binary.
+wxBitmapBundle LoadSVGAsset(const char* name, const wxSize& sizeDef) {
+  const vortch::EmbeddedAsset a = vortch::embedded_asset(name);
+  if (!a.data) return wxBitmapBundle();  // unknown name -> empty bundle
+  return wxBitmapBundle::FromSVG(a.data, a.size, sizeDef);
 }
 const wxColour kAccent(49, 196, 255);  // move-mode highlight
 constexpr int kFullSize = 96;
@@ -105,10 +109,12 @@ public:
               const nlohmann::json& visual, wxBitmapBundle bundle)
       : wxFrame(nullptr, wxID_ANY, "vortch", wxDefaultPosition,
                 wxSize(kFullSize, kFullSize),
-                wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP | wxBORDER_NONE),
+                wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP | wxBORDER_NONE |
+                    wxFRAME_SHAPED),
         ctrl_(ctrl), id_(std::move(id)), bundle_(std::move(bundle)) {
     SetClientSize(kFullSize, kFullSize);
     SetBackgroundStyle(wxBG_STYLE_PAINT);
+    vortch::styleGadgetWindow(GetHandle());  // suppress WM drop-shadow (before map)
     escTimer_.SetOwner(this, ID_TIMER_ESC);
     animTimer_.SetOwner(this, ID_TIMER_ANIM);
     leaveTimer_.SetOwner(this, ID_TIMER_LEAVE);
@@ -141,7 +147,12 @@ public:
       Centre();
     }
     ApplyZMode();
-    if (peekMode_) SnapTo(kPeekSize);
+    // The window stays a fixed kFullSize at a fixed position; the peek size is a
+    // shape/paint state. Apply the initial shape from a CallAfter: SetShape in the
+    // ctor or the first paint is too early to stick (GTK resets the shape around the
+    // initial map), leaving a persisted-peek gadget showing the full-size frame.
+    curSize_ = targetSize_ = peekMode_ ? kPeekSize : kFullSize;
+    if (peekMode_) CallAfter([this] { shapedSize_ = -1; UpdateShape(curSize_); Refresh(); });
   }
 
   const std::string& objectId() const { return id_; }
@@ -213,35 +224,52 @@ private:
 #endif
   }
 
-  // peek animation (center-anchored resize)
-  void ResizeKeepingCenter(int s) {
-    const wxRect r = GetRect();
-    const wxPoint c(r.x + r.width / 2, r.y + r.height / 2);
-    SetSize(c.x - s / 2, c.y - s / 2, s, s);
-    Refresh();
+  // Peek animation. The top-level window stays a FIXED kFullSize at a FIXED
+  // position; the visible size is animated purely by reshaping the window (an X
+  // SHAPE / region clip) and repainting the icon centered. We do NOT resize/move the
+  // top-level window per frame: on X11 the WM applies a window's move and resize
+  // non-atomically, so a 60fps move+resize makes the window slide (and calling GDK
+  // move_resize directly on a managed toplevel is worse — the WM reparents it, so
+  // coordinates crawl). Reshaping touches only the client region — no WM
+  // ConfigureRequest, no move — so the box scales about its center with no sliding,
+  // and the shaped-away area is truly transparent (clicks pass through). The WM
+  // drop-shadow is suppressed via a DOCK type hint (styleGadgetWindow) so the fixed
+  // window's shadow doesn't leak past the shaped-down icon.
+  void UpdateShape(int s) {
+    if (s == shapedSize_) return;
+    const int off = (kFullSize - s) / 2;
+    SetShape(wxRegion(off, off, s, s));
+    shapedSize_ = s;
   }
+  // Screen rect of the currently-visible (shaped) region — the real hit target.
+  wxRect VisibleScreenRect() const {
+    const wxPoint tl = GetScreenPosition();
+    const int off = (kFullSize - curSize_) / 2;
+    return wxRect(tl.x + off, tl.y + off, curSize_, curSize_);
+  }
+  void ApplyVisualSize(int s) { curSize_ = s; UpdateShape(s); Refresh(); }
   void AnimateTo(int target) { targetSize_ = target; if (!animTimer_.IsRunning()) animTimer_.Start(16); }
-  void SnapTo(int s) { if (animTimer_.IsRunning()) animTimer_.Stop(); curSize_ = targetSize_ = s; ResizeKeepingCenter(s); }
+  void SnapTo(int s) { if (animTimer_.IsRunning()) animTimer_.Stop(); targetSize_ = s; ApplyVisualSize(s); }
   void OnAnimTimer(wxTimerEvent&) {
     if (curSize_ == targetSize_) { animTimer_.Stop(); return; }
     int diff = targetSize_ - curSize_, step = diff / 4;
     if (step == 0) step = (diff > 0) ? 1 : -1;
-    curSize_ += step;
-    if ((diff > 0 && curSize_ > targetSize_) || (diff < 0 && curSize_ < targetSize_)) curSize_ = targetSize_;
-    ResizeKeepingCenter(curSize_);
+    int next = curSize_ + step;
+    if ((diff > 0 && next > targetSize_) || (diff < 0 && next < targetSize_)) next = targetSize_;
+    ApplyVisualSize(next);
     if (curSize_ == targetSize_) animTimer_.Stop();
   }
   void OnEnter(wxMouseEvent& e) { hovered_ = true;  if (peekMode_ && !moveMode_) AnimateTo(kFullSize); e.Skip(); }
   void OnLeave(wxMouseEvent& e) { hovered_ = false; if (peekMode_ && !moveMode_) leaveTimer_.StartOnce(180); e.Skip(); }
   void OnLeaveTimer(wxTimerEvent&) {
     if (!peekMode_ || moveMode_) return;
-    const bool over = GetScreenRect().Contains(wxGetMousePosition());
+    const bool over = VisibleScreenRect().Contains(wxGetMousePosition());
     hovered_ = over;
     AnimateTo((over || dragOver_) ? kFullSize : kPeekSize);
   }
   void ReconcilePeek() {
     if (!peekMode_ || moveMode_) return;
-    const bool over = GetScreenRect().Contains(wxGetMousePosition());
+    const bool over = VisibleScreenRect().Contains(wxGetMousePosition());
     hovered_ = over;
     AnimateTo((over || dragOver_) ? kFullSize : kPeekSize);
   }
@@ -325,7 +353,7 @@ private:
   void OnLeftDown(wxMouseEvent& e) {
     if (!moveMode_) { e.Skip(); return; }
     const wxPoint mouse = wxGetMousePosition();
-    if (GetScreenRect().Contains(mouse)) { dragging_ = true; dragMouseStart_ = mouse; dragWinStart_ = GetPosition(); }
+    if (VisibleScreenRect().Contains(mouse)) { dragging_ = true; dragMouseStart_ = mouse; dragWinStart_ = GetPosition(); }
     else ExitMoveMode(false);
   }
   void OnMotion(wxMouseEvent& e) {
@@ -340,16 +368,26 @@ private:
   void OnCaptureLost(wxMouseCaptureLostEvent&) { if (moveMode_) ExitMoveMode(true); }
 
   void OnPaint(wxPaintEvent&) {
+    if (shapedSize_ < 0) UpdateShape(curSize_);   // establish initial shape once realized
     wxAutoBufferedPaintDC dc(this);
     dc.SetBackground(*wxWHITE_BRUSH);
     dc.Clear();
-    const wxSize sz = GetClientSize();
-    wxBitmap bmp = bundle_.GetBitmap(sz);
-    if (bmp.IsOk()) dc.DrawBitmap(bmp, 0, 0, true);
+    const int off = (kFullSize - curSize_) / 2;   // center the shaped box in the window
+    // Rasterize the SVG at the *physical* pixel size, then tag the bitmap with the
+    // window's DPI scale so DrawBitmap lays it down at the logical size. Passing the
+    // logical size straight to GetBitmap() yields a scale-factor-1 bitmap that a HiDPI
+    // DC then draws scale× too large.
+    const double scale = GetDPIScaleFactor();     // 1.0, 2.0, fractional, ...
+    const wxSize phys(wxRound(curSize_ * scale), wxRound(curSize_ * scale));
+    wxBitmap bmp = bundle_.GetBitmap(phys);
+    if (bmp.IsOk()) {
+      bmp.SetScaleFactor(scale);
+      dc.DrawBitmap(bmp, off, off, true);
+    }
     if (moveMode_) {
       dc.SetBrush(*wxTRANSPARENT_BRUSH);
       dc.SetPen(wxPen(kAccent, 3));
-      dc.DrawRectangle(1, 1, sz.GetWidth() - 2, sz.GetHeight() - 2);
+      dc.DrawRectangle(off + 1, off + 1, curSize_ - 2, curSize_ - 2);
     }
   }
 
@@ -364,8 +402,9 @@ private:
   bool    peekMode_    = false;
   bool    hovered_     = false;
   bool    dragOver_    = false;
-  int     curSize_     = kFullSize;
+  int     curSize_     = kFullSize;    // visible (shaped) size, animated per frame
   int     targetSize_  = kFullSize;
+  int     shapedSize_  = -1;           // last size passed to SetShape (-1 = none yet)
   void*   savedForeground_ = nullptr;  // HWND on MSW; only used under __WXMSW__
   wxPoint originalPos_, dragMouseStart_, dragWinStart_;
 };
@@ -460,7 +499,7 @@ public:
     }
 
     SetExitOnFrameDelete(false);  // keep running with only a tray (zero vortices)
-    bundle_ = wxBitmapBundle::FromSVGFile(AssetPath("icon.svg"), wxSize(256, 256));
+    bundle_ = LoadSVGAsset("icon.svg", wxSize(256, 256));
     LoadVortices();
     return true;
   }

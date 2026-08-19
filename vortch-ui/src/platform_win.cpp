@@ -27,4 +27,7 @@ bool uninstallAutostart() {
   return r == ERROR_SUCCESS;
 }
 
+// No-op on Win32: the shaped-window/animation scheme needs no OS-specific styling.
+void styleGadgetWindow(void* /*nativeHandle*/) {}
+
 } // namespace vortch

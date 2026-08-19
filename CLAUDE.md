@@ -40,3 +40,11 @@ All tracked text is **LF** in both the object store and the working tree.
   (i.e. `kooky006/venv`, alongside this repo — deliberately OUTSIDE the git repo).
 - The venv is already on PATH. Invoke the interpreter as plain `python`
   (never a full/explicit path, and do not re-create or re-activate it).
+- **Linux (this build VM):** the OS ships only `python3`, no `python`
+  (`/usr/bin/python3` → 3.10). The venv supplies a `python` alias and the
+  launch script (`~/kooky006.sh`) activates the venv, so in the normal
+  workspace `python` works as documented above. The only caveat: in a shell
+  where the venv was *not* activated (nothing in the profiles puts it on PATH),
+  bare `python` doesn't exist — use `python3` there. Also note the Linux venv
+  is Python **3.10.x**, not 3.12 (that 3.12 is the Windows venv — the venv is
+  machine-local, living outside the repo).

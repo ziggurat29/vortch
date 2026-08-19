@@ -6,4 +6,6 @@ namespace vortch {
 bool installAutostart(const std::string& /*command*/) { return false; }
 bool uninstallAutostart() { return false; }
 
+void styleGadgetWindow(void* /*nativeHandle*/) {}
+
 } // namespace vortch

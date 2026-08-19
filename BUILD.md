@@ -35,7 +35,7 @@ Install toolchain + the system dev libs vcpkg's wxWidgets needs, then build:
 ```
 sudo apt update
 sudo apt install -y build-essential cmake ninja-build pkg-config git \
-  curl zip unzip tar autoconf automake libtool \
+  curl zip unzip tar autoconf automake libtool bison flex \
   libgtk-3-dev libgl1-mesa-dev libglu1-mesa-dev \
   libx11-dev libxrandr-dev libxi-dev libxxf86vm-dev
 
@@ -58,10 +58,14 @@ the z-mode menu items do nothing yet and autostart isn't wired. The **system tra
 (`wxTaskBarIcon`) depends on the desktop's notification area — MATE's should work,
 but if it doesn't appear that's a known DE-dependent wx limitation, not a vortch bug.
 Build `core` first (fast — proves the Store compiles + tests pass under gcc), then
-`full`. `VORTCH_ASSETS_DIR` is baked to the repo's `assets/` at build time, so the
-dev build runs from anywhere.
+`full`. Assets (`assets/*.svg`) are embedded into the binary at build time (see
+`vortch-ui/cmake/embed_assets.cmake`), so the executable is self-contained and
+runs from anywhere with no external asset files.
 
 ## Notes
 - The wxWidgets (`full`) build can take many minutes the first time; run it
   detached so it is not interrupted.
+- `bison`/`flex` are required transitively: vcpkg builds `gettext` (a wxWidgets
+  dep) from source, and its configure needs `bison`. Without it the `full`
+  configure fails early with "Could not find bison" — long before wxWidgets.
 - All build output goes under `build/` (git-ignored).
