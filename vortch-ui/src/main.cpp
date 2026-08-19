@@ -67,6 +67,7 @@ struct VortchController {
   virtual void toggleAllVisible() = 0;
   virtual bool anyVisible() = 0;
   virtual bool hasVortices() = 0;
+  virtual std::size_t vortexCount() = 0;
 };
 
 // Tray icon: create/show-hide vortices + quit.
@@ -85,16 +86,16 @@ public:
                              ctrl_->anyVisible() ? "Hide vortices" : "Show vortices");
     if (!ctrl_->hasVortices()) toggle->Enable(false);
     m->AppendSeparator();
-    m->Append(wxID_EXIT, "Quit vortch");
+    m->Append(ID_QUIT, "Quit vortch");
     return m;
   }
 private:
-  enum { ID_NEW = wxID_HIGHEST + 200, ID_TOGGLE };
+  enum { ID_NEW = wxID_HIGHEST + 200, ID_TOGGLE, ID_QUIT };
   void OnMenu(wxCommandEvent& e) {
     switch (e.GetId()) {
       case ID_NEW:     ctrl_->newVortex(); break;
       case ID_TOGGLE:  ctrl_->toggleAllVisible(); break;
-      case wxID_EXIT:  wxTheApp->ExitMainLoop(); break;
+      case ID_QUIT:    wxTheApp->ExitMainLoop(); break;
     }
   }
   VortchController* ctrl_;
@@ -190,7 +191,9 @@ public:
 private:
   enum {
     ID_MOVE = wxID_HIGHEST + 1, ID_Z_TOPMOST, ID_Z_ONDESKTOP,
-    ID_PEEK, ID_REMOVE,
+    ID_PEEK, ID_REMOVE, ID_QUIT,  // ID_QUIT: custom (not wxID_EXIT) so wxGTK does
+                                  // not attach/show the stock Ctrl+Q accelerator —
+                                  // the gadget can't receive keyboard input anyway.
     ID_TIMER_ESC, ID_TIMER_ANIM, ID_TIMER_LEAVE
   };
 
@@ -285,8 +288,15 @@ private:
     menu.AppendSeparator();
     menu.AppendCheckItem(ID_PEEK, "Peek mode (hover to expand)")->Check(peekMode_);
     menu.AppendSeparator();
-    menu.Append(ID_REMOVE, "Remove this vortex");
-    menu.Append(wxID_EXIT, "Quit vortch");
+    auto* rem = menu.Append(ID_REMOVE, "Remove this vortex");
+#ifdef __WXGTK__
+    // Linux DEs today have no system tray wx can use, so removing the last vortex
+    // would leave vortch running but unreachable (no tray to make a new one or
+    // quit). Keep at least one until a real tray exists. (No such gate elsewhere:
+    // on Windows the tray keeps the app reachable with zero vortices.)
+    if (ctrl_ && ctrl_->vortexCount() <= 1) rem->Enable(false);
+#endif
+    menu.Append(ID_QUIT, "Quit vortch");
 
     pendingMove_ = false;
 #ifdef __WXMSW__
@@ -315,7 +325,7 @@ private:
         Save();
         break;
       case ID_REMOVE:      if (ctrl_) ctrl_->removeVortex(id_); break;  // destroys this
-      case wxID_EXIT:      wxTheApp->ExitMainLoop(); break;
+      case ID_QUIT:        wxTheApp->ExitMainLoop(); break;
       default: e.Skip();
     }
   }
@@ -544,6 +554,7 @@ public:
     return false;
   }
   bool hasVortices() override { return !frames_.empty(); }
+  std::size_t vortexCount() override { return frames_.size(); }
 
 private:
   void ShowInfo() {
